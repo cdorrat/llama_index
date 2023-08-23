@@ -1,4 +1,4 @@
-import json
+import struct
 from collections import namedtuple
 from typing import Any, List, Optional, Type
 
@@ -20,7 +20,6 @@ class SqliteVectorStore(VectorStore):
    ) -> None:
       try:
          import sqlite3  # noqa: F401
-
          import aiosqlite  # noqa: F401
          import sqlite_vss  # noqa: F401
       except ImportError:
@@ -80,12 +79,17 @@ class SqliteVectorStore(VectorStore):
                         metadata,
                         metadata['doc_id']))
             cx.execute(f'insert into {self.node_table_name}(rowid, embedding)',
-                       (cx.lastrowid, json.dumps(result.embedding)))
+                       (cx.lastrowid, self._embedding_to_db(result.embedding)))
             ids.append(result.id)
       cx.close()
       self.con.commit()
       return ids
    
+   def _embedding_to_db(ebbedding) -> Any:
+      # json.dumps(result.embedding) # alternate json version
+      return struct.pack('%sf' % len(ebbedding), *ebbedding)
+
+
    def delete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
       with self.con.cursor() as cx:
          cx.execute(f'delete from {self.vss_table_name} '
@@ -96,5 +100,33 @@ class SqliteVectorStore(VectorStore):
       self.con.commit()
 
    def query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
-      print("TODO implement me...")
+      cx = self.con.cursor()
+      results = cx.fetchall(f'''select n.node_id, n.node_text, n.metadata, n.doc_id, vss.distance
+                  from {self.node_table_name} n join                  
+                    (select rowid, distance 
+                     from vss_lookup 
+                     where vss_search(embedding, ?)
+                     limit ?) vss on n.id = vss.rowid ''',
+                     (self._embedding_to_db(query.query_embedding), query.similarity_top_k))
+      return self._db_query_to_query_result(results)
+      
+      
+   def _db_query_to_query_result(db_results) -> VectorStoreQueryResult:
+      nodes = []
+      similarities = []
+      ids = []
+      for res in db_results:
+         node = metadata_dict_to_node(res['metadata'])
+         node.set_content(str(res['node_text']))
+         nodes.append()
+         similarities.append[res['distance']]
+         ids.append[res['node_id']]
+
+      return VectorStoreQueryResult(
+            nodes=nodes,
+            similarities=similarities,
+            ids=ids,
+        )
+
+
 
